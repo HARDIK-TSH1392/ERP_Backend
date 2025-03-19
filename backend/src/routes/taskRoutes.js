@@ -1,15 +1,21 @@
 const express = require('express');
-const { createTask, getAllTasks, getTaskAssignments, deleteTask, getTaskActivityLog, getUserTasks } = require('../controllers/taskController');
+const { 
+    createPost, 
+    getUserPosts, 
+    deletePost 
+} = require('../controllers/taskController'); // ✅ Updated to Post Controller
+
 const { authenticateUser } = require('../middlewares/authMiddleware');
 
 const router = express.Router();
 
-router.post('/create', createTask); // Tested
-router.get('/', authenticateUser, getAllTasks); // Tested
-router.get('/user/tasks', authenticateUser, getUserTasks); // Tested
-router.get('/:taskId/assignments', getTaskAssignments); // This route should return list of assignments for particular task
-router.delete('/:taskId', deleteTask);
-router.get('/tasks/:taskId/activity-log', getTaskActivityLog); // Tested
-// Add the new route for fetching tasks by userId
+// ✅ Create a new post (title, content, meeting location, meeting date, upload image)
+router.post('/create', authenticateUser, createPost);
+
+// ✅ Fetch all posts of the authenticated user (Used in Profile Page)
+router.get('/', authenticateUser, getUserPosts);
+
+// ✅ Delete a post (Only the owner can delete their own post)
+router.delete('/:postId', authenticateUser, deletePost);
 
 module.exports = router;

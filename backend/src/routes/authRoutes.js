@@ -28,26 +28,26 @@ router.get('/getUserProfile',authenticateUser, async(req, res) => {
 router.post('/verify', verify);
 
 // Route to fetch roles: Tested
-router.get('/roles', (req, res) => {
-    res.status(200).json({ roles: Object.values(Roles) });
-});
+// router.get('/roles', (req, res) => {
+//     res.status(200).json({ roles: Object.values(Roles) });
+// });
 
-router.get('/subRoles', (req, res) => {
-    res.status(200).json({subRoles: Object.values(SubRoles) });
-})
+// router.get('/subRoles', (req, res) => {
+//     res.status(200).json({subRoles: Object.values(SubRoles) });
+// })
 
 // Route to fetch tasks
 router.get('/tasks', (req, res) => {
     res.status(200).json({ tasks: Object.values(Tasks) });
 })
 
-// Tested
+// Profile Edit
 router.put('/user-info',authenticateUser, updateProfile);
 
-// Tested
+// Fill the form for user name
 router.post('/form', fillForm);
 
-// Tested
+Tested
 router.get('/ac-name/:pc', (req, res) => {
     const pc = req.params.pc.trim();
 
@@ -58,7 +58,7 @@ router.get('/ac-name/:pc', (req, res) => {
     res.status(200).json({ acNames: PC_NAMES[pc] });
 });
 
-// Tested
+Tested
 router.get('/pc-name/:state', (req, res) => {
     const state = req.params.state.trim();
 
@@ -69,7 +69,7 @@ router.get('/pc-name/:state', (req, res) => {
     res.status(200).json({ pcNames: STATES[state] });
 });
 
-// Tested
+Tested
 router.get('/states', (req, res) => {
     res.status(200).json({ states: Object.keys(STATES) });
 });

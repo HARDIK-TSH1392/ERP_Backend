@@ -1,167 +1,145 @@
-const Task = require('../models/Task');
+const Post = require('../models/Task');
 const User = require('../models/userModel'); // Import the User model
-const twilio = require('twilio');
+const multer = require('multer');
+const multerS3 = require('multer-s3');
+const { S3Client } = require('@aws-sdk/client-s3');
+const { v4: uuidv4 } = require('uuid');
 
-exports.createTask = async (req, res) => {
+// ✅ Initialize S3 Client
+const s3Client = new S3Client({
+    region: process.env.AWS_REGION,
+    credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+    }
+});
+
+// ✅ Configure multer for S3 upload
+const upload = multer({
+    storage: multerS3({
+        s3: s3Client,
+        bucket: process.env.AWS_BUCKET_NAME,
+        contentType: multerS3.AUTO_CONTENT_TYPE,
+        acl: 'private', // Secure uploads
+        key: (req, file, cb) => {
+            const sanitizedName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+            const fileExtension = sanitizedName.split('.').pop().toLowerCase();
+            const uniqueFilename = `posts/${req.user._id}/${Date.now()}-${uuidv4()}.${fileExtension}`;
+            cb(null, uniqueFilename);
+        }
+    }),
+    fileFilter: (req, file, cb) => {
+        const allowedTypes = ['image/jpeg', 'image/png'];
+        if (!allowedTypes.includes(file.mimetype)) {
+            return cb(new Error('Only JPEG and PNG files are allowed.'), false);
+        }
+        cb(null, true);
+    },
+    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+}).single('file'); // Accepts a single file upload
+
+exports.createPost = async (req, res) => {
     try {
-        const { title, description, dueDate, phoneNumbers } = req.body;
+        // ✅ Authenticate user
+        const userId = req.user._id;
+        if (!userId) {
+            return res.status(401).json({ success: false, error: 'Unauthorized: User ID not found in token.' });
+        }
 
-        // Validate input
-        if (!Array.isArray(phoneNumbers) || phoneNumbers.length === 0) {
-            return res.status(400).json({
+        // ✅ Upload the file (if provided)
+        upload(req, res, async function (err) {
+            if (err) {
+                console.error('File upload error:', err);
+                return res.status(400).json({ success: false, error: err.message || 'File upload failed' });
+            }
+
+            // ✅ Extract form data
+            const { title, content, state, pc_name, ac_name, meetingDate } = req.body;
+            const fileUrl = req.file ? req.file.location : null; // ✅ Store S3 URL if uploaded
+
+            // ✅ Create post in MongoDB
+            const post = new Post({
+                title,
+                content,
+                fileUrl, // ✅ Store S3 file URL
+                state,
+                pc_name,
+                ac_name,
+                meetingDate,
+                userId,
+            });
+
+            await post.save();
+
+            res.status(201).json({
+                success: true,
+                message: 'Post created successfully',
+                post,
+            });
+        });
+    } catch (error) {
+        console.error('Post creation error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+exports.getUserPosts = async (req, res) => {
+    try {
+        // ✅ Get the authenticated user's ID from middleware
+        const userId = req.user._id;
+
+        if (!userId) {
+            return res.status(401).json({
                 success: false,
-                error: 'Phone numbers are required to assign the task.'
+                error: 'Unauthorized: User ID not found in token.'
             });
         }
 
-        // Find users by phone numbers
-        const users = await User.find({ phoneNumber: { $in: phoneNumbers }, role: "VOLUNTEER" });
+        // ✅ Fetch posts created by this user
+        const posts = await Post.find({ userId });
 
-        if (users.length === 0) {
+        res.status(200).json({ success: true, posts });
+    } catch (error) {
+        console.error('Error fetching user posts:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+};
+
+
+exports.deletePost = async (req, res) => {
+    try {
+        const { postId } = req.params;
+
+        // ✅ Get the authenticated user's ID from middleware
+        const userId = req.user._id;
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized: User ID not found in token.'
+            });
+        }
+
+        // ✅ Find the post and ensure it belongs to the logged-in user
+        const post = await Post.findOne({ _id: postId, userId });
+
+        if (!post) {
             return res.status(404).json({
                 success: false,
-                error: 'No users found with the provided phone numbers.'
+                error: 'Post not found or you do not have permission to delete it.'
             });
         }
 
-        // Create the task
-        const assignedUsers = users.map(user => ({
-            userId: user._id,
-            status: 'To Do'
-        }));
+        // ✅ Delete the post
+        await post.deleteOne();
 
-        const task = new Task({
-            title,
-            description,
-            dueDate,
-            assignedUsers
-        });
-        await task.save();
-
-        // Initialize Twilio client
-
-        // Prepare task message
-        const taskMessage = `New task assigned:\nTitle: ${task.title}\nDue: ${task.dueDate}\nDescription: ${task.description}`;
-
-        // Update users in bulk to reduce multiple database writes
-        await User.updateMany(
-            { _id: { $in: users.map(user => user._id) } },
-            {
-                $inc: { taskCount: 1 },
-                $push: { tasks: task._id },
-                $set: { "taskStatus.To Do": 1 }
-            }
-        );
-
-        res.status(201).json({
-            success: true,
-            task,
-        });
+        res.status(200).json({ success: true, message: 'Post deleted successfully.' });
     } catch (error) {
-        console.error('Task creation error:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
-    }
-};
-
-exports.getAllTasks = async (req, res) => {
-    try {
-        // Fetch all tasks and populate assignedUsers.userId
-        const tasks = await Task.find().populate('assignedUsers.userId', 'phoneNumber firstName lastName');
-        res.status(200).json({ success: true, tasks });
-    } catch (error) {
+        console.error('Error deleting post:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 };
 
-exports.getTaskAssignments = async (req, res) => {
-    try {
-        const { taskId } = req.params;
-
-        // Find the task and populate assigned users
-        const task = await Task.findById(taskId).populate('assignedUsers.userId', 'phoneNumber firstName lastName');
-        if (!task) {
-            return res.status(404).json({ success: false, error: 'Task not found.' });
-        }
-
-        // Format response
-        const assignments = task.assignedUsers.map((assignment) => ({
-            userId: assignment.userId._id,
-            phoneNumber: assignment.userId.phoneNumber,
-            name: `${assignment.userId.firstName} ${assignment.userId.lastName}`.trim(),
-            status: assignment.status
-        }));
-
-        res.status(200).json({ success: true, taskId: task._id, assignments });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-};
-
-exports.deleteTask = async (req, res) => {
-    try {
-        const { taskId } = req.params;
-
-        const task = await Task.findById(taskId);
-        if (!task) {
-            return res.status(404).json({ success: false, error: 'Task not found.' });
-        }
-
-        for (const assignment of task.assignedUsers) {
-            const user = await User.findById(assignment.userId);
-            if (user) {
-                user.tasks = user.tasks.filter(id => id.toString() !== task._id.toString());
-                user.taskCount = Math.max(user.taskCount - 1, 0);
-                if (user.taskStatus.has(assignment.status)) {
-                    user.taskStatus.set(assignment.status, Math.max(user.taskStatus.get(assignment.status) - 1, 0));
-                }
-                await user.save();
-            }
-        }
-
-        // Delete the task
-        await task.deleteOne();
-
-        res.status(200).json({ success: true, message: 'Task deleted successfully.' });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-};
-
-exports.getTaskActivityLog = async (req, res) => {
-    try {
-        const { taskId } = req.params;
-
-        // Find the task by ID
-        const task = await Task.findById(taskId).populate('assignedUsers.userId', 'firstName lastName phoneNumber');
-        if (!task) {
-            return res.status(404).json({ success: false, error: 'Task not found.' });
-        }
-
-        // Extract the activity log from assignedUsers
-        const activityLog = task.assignedUsers
-            .map((assignment) => ({
-                userId: assignment.userId._id,
-                name: `${assignment.userId.firstName || ''} ${assignment.userId.lastName || ''}`.trim(),
-                phoneNumber: assignment.userId.phoneNumber,
-                status: assignment.status,
-                score: assignment.score,
-                uploads: assignment.uploads || [],
-            }))
-            .sort((a, b) => b.score - a.score); // Sort by score in descending order
-
-        res.status(200).json({
-            success: true,
-            taskId: task._id,
-            taskTitle: task.title,
-            activityLog,
-        });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
-};
 
 exports.getUserTasks = async (req, res) => {
     const userId = req.user.id;
